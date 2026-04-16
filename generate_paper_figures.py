@@ -108,6 +108,12 @@ def fig1_daily_timeline(posts_df, comments_df):
     ax.legend(frameon=False, loc="upper right")
     fig.autofmt_xdate(rotation=45, ha="right")
 
+    # Meta acquisition vertical line
+    meta_date = pd.Timestamp("2026-03-10")
+    ax.axvline(meta_date, color=C_GREY, linestyle="--", linewidth=0.8, alpha=0.7)
+    ax.text(meta_date, ax.get_ylim()[1] * 0.92, "  Meta acquisition",
+            fontsize=6, color=C_GREY, va="top")
+
     _save(fig, "fig1_daily_timeline")
 
 
@@ -142,91 +148,93 @@ def fig2_agent_activity(posts_df):
 
 
 # ===================================================================
-# Figure 3 — Agent Interaction Network
+# Figure 3 — Agent Interaction Network (top-300 degree subgraph)
 # ===================================================================
 def fig3_network(posts_df, comments_df):
     logger.info("Generating Figure 3: Agent Interaction Network")
 
-    # Build the interaction graph
-    author_map = dict(zip(posts_df["id"], posts_df["agent_name"]))
-    c = comments_df.copy()
-    c["post_author"] = c["post_id"].map(author_map)
-
-    interactions = (
-        c.groupby(["agent_name", "post_author"])
-        .size()
-        .reset_index(name="weight")
+    # Build directed interaction graph from comments
+    merged = comments_df[["post_id", "agent_name"]].merge(
+        posts_df[["id", "agent_name"]].rename(
+            columns={"id": "post_id", "agent_name": "post_author"}
+        ),
+        on="post_id", how="inner",
     )
-    interactions = interactions[
-        (interactions["agent_name"] != interactions["post_author"])
-        & (interactions["weight"] >= 3)
-    ]
+    merged = merged[merged["agent_name"] != merged["post_author"]]
+    edges = merged.groupby(["agent_name", "post_author"]).size().reset_index(name="weight")
 
-    G = nx.Graph()
-    for _, row in interactions.iterrows():
-        if G.has_edge(row["agent_name"], row["post_author"]):
-            G[row["agent_name"]][row["post_author"]]["weight"] += row["weight"]
-        else:
-            G.add_edge(row["agent_name"], row["post_author"], weight=row["weight"])
+    G = nx.DiGraph()
+    for _, row in edges.iterrows():
+        G.add_edge(row["agent_name"], row["post_author"], weight=int(row["weight"]))
 
-    logger.info("Network: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
+    logger.info("Full network: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
 
-    # Keep largest connected component
     if G.number_of_nodes() == 0:
         logger.warning("Empty network, skipping figure 3")
         return
 
-    lcc = max(nx.connected_components(G), key=len)
-    G = G.subgraph(lcc).copy()
-    logger.info("Largest component: %d nodes", G.number_of_nodes())
+    # Filter to top 300 by total degree
+    degree_seq = sorted(G.degree(), key=lambda x: x[1], reverse=True)
+    top_nodes = [n for n, d in degree_seq[:300]]
+    H = G.subgraph(top_nodes).copy()
+
+    # Remove single-interaction edges for clarity
+    edges_to_remove = [(u, v) for u, v, d in H.edges(data=True) if d.get("weight", 1) < 2]
+    H.remove_edges_from(edges_to_remove)
+    H.remove_nodes_from(list(nx.isolates(H)))
+    logger.info("Filtered subgraph: %d nodes, %d edges", H.number_of_nodes(), H.number_of_edges())
 
     # Community detection
     from networkx.algorithms.community import greedy_modularity_communities
-    communities = list(greedy_modularity_communities(G, weight="weight"))
+    H_und = H.to_undirected()
+    communities = list(greedy_modularity_communities(H_und))
     communities = sorted(communities, key=len, reverse=True)
 
-    # Assign community colors
     comm_map = {}
     for i, comm in enumerate(communities):
         for node in comm:
             comm_map[node] = i
 
-    # Use a qualitative colormap
-    n_comms = min(len(communities), 12)
-    cmap = plt.cm.get_cmap("Set3", n_comms)
-    node_colors = [cmap(comm_map.get(n, 0) % n_comms) for n in G.nodes()]
+    colors_palette = ["#4ECDC4", "#FFD93D", "#C3AED6", "#FF6B6B", "#6C9BCF", "#FF9F43"]
+    node_colors = [colors_palette[comm_map.get(n, 0) % len(colors_palette)] for n in H.nodes()]
 
-    # Node sizes by degree
-    degrees = dict(G.degree(weight="weight"))
-    max_deg = max(degrees.values())
-    node_sizes = [max(2, 40 * (degrees[n] / max_deg) ** 0.5) for n in G.nodes()]
+    # Node sizes by weighted degree
+    degrees = dict(H.degree(weight="weight"))
+    max_deg = max(degrees.values()) if degrees else 1
+    node_sizes = [max(8, (degrees.get(n, 0) / max_deg) * 250) for n in H.nodes()]
 
-    # Layout — spring with weight
+    # Layout
     logger.info("Computing layout...")
-    pos = nx.spring_layout(G, k=0.8, iterations=50, seed=42, weight="weight")
+    pos = nx.spring_layout(H, k=0.6, iterations=120, seed=42, weight="weight")
 
     w = DOUBLE_COL_MM * MM_TO_INCH
     fig, ax = plt.subplots(figsize=(w, w * 0.8))
 
-    nx.draw_networkx_edges(G, pos, alpha=0.03, width=0.3, edge_color=C_GREY, ax=ax)
-    nx.draw_networkx_nodes(
-        G, pos, node_size=node_sizes, node_color=node_colors,
-        alpha=0.7, linewidths=0, ax=ax,
-    )
+    nx.draw_networkx_edges(H, pos, alpha=0.04, width=0.2, arrows=False,
+                           edge_color="#999999", ax=ax)
+    nx.draw_networkx_nodes(H, pos, node_size=node_sizes, node_color=node_colors,
+                           alpha=0.85, linewidths=0.3, edgecolors="white", ax=ax)
 
-    ax.set_xlim(ax.get_xlim())
-    ax.set_ylim(ax.get_ylim())
+    # Label top 6 agents with offset annotations (no overlap)
+    top6 = sorted(degrees.items(), key=lambda x: x[1], reverse=True)[:6]
+    for name, deg in top6:
+        x, y = pos[name]
+        ax.annotate(
+            name[:16], xy=(x, y), xytext=(12, 12), textcoords="offset points",
+            fontsize=6, fontweight="bold", color="#222222",
+            bbox=dict(boxstyle="round,pad=0.2", facecolor="white",
+                      edgecolor="#cccccc", alpha=0.9),
+            arrowprops=dict(arrowstyle="->", color="#666666", lw=0.8),
+            zorder=10,
+        )
+
     ax.axis("off")
 
-    # Legend for top communities
-    from matplotlib.lines import Line2D
-    legend_elements = []
-    for i in range(min(6, len(communities))):
-        legend_elements.append(
-            Line2D([0], [0], marker="o", color="w", markerfacecolor=cmap(i),
-                   markersize=5, label=f"Community {i+1} ({len(communities[i]):,})")
-        )
-    ax.legend(handles=legend_elements, loc="lower left", frameon=False, fontsize=6)
+    # Legend
+    for rank, comm in enumerate(communities[:min(4, len(communities))]):
+        ax.scatter([], [], c=colors_palette[rank % len(colors_palette)], s=30,
+                   label=f"Community {rank+1} ({len(comm)} agents)")
+    ax.legend(loc="lower left", fontsize=6, framealpha=0.95, edgecolor="#cccccc")
 
     _save(fig, "fig3_interaction_network")
 
@@ -259,7 +267,7 @@ def fig4_submolt_distribution(posts_df):
 
 
 # ===================================================================
-# Figure 5 — Hourly Posting Pattern (Polar)
+# Figure 5 — Hourly Posting Pattern (Bar Chart)
 # ===================================================================
 def fig5_hourly_pattern(posts_df):
     logger.info("Generating Figure 5: Hourly Posting Pattern")
@@ -272,31 +280,21 @@ def fig5_hourly_pattern(posts_df):
     total = sum(counts)
     pcts = [c / total * 100 for c in counts]
 
-    # Close the circle
-    angles = np.linspace(0, 2 * np.pi, 24, endpoint=False)
-    pcts_closed = pcts + [pcts[0]]
-    angles_closed = np.append(angles, angles[0])
-
     w = SINGLE_COL_MM * MM_TO_INCH
-    fig, ax = plt.subplots(figsize=(w, w), subplot_kw={"projection": "polar"})
+    fig, ax = plt.subplots(figsize=(w * 1.3, w * 0.8))
 
-    ax.fill(angles_closed, pcts_closed, alpha=0.25, color=C_POST)
-    ax.plot(angles_closed, pcts_closed, color=C_POST, linewidth=1.2)
+    ax.bar(hours, pcts, color=C_POST, alpha=0.8, width=0.8)
 
-    # Hour labels
-    ax.set_xticks(angles)
-    ax.set_xticklabels([f"{h:02d}" for h in hours], fontsize=6)
-    ax.set_theta_offset(np.pi / 2)  # 0h at top
-    ax.set_theta_direction(-1)       # clockwise
-
-    # Radial labels
-    ax.set_ylabel("")
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:.1f}%"))
-    ax.tick_params(axis="y", labelsize=5)
-
-    # Uniform distribution reference
+    # Uniform baseline
     uniform = 100 / 24
-    ax.plot(angles_closed, [uniform] * 25, color=C_GREY, linewidth=0.5, linestyle="--", alpha=0.5)
+    ax.axhline(uniform, color=C_COMMENT, linestyle="--", linewidth=0.8, alpha=0.7,
+               label=f"Uniform ({uniform:.2f}%)")
+
+    ax.set_xlabel("Hour of day (UTC)")
+    ax.set_ylabel("% of all posts")
+    ax.set_xticks(range(0, 24, 3))
+    ax.set_xticklabels([f"{h:02d}" for h in range(0, 24, 3)])
+    ax.legend(frameon=False, fontsize=6)
 
     _save(fig, "fig5_hourly_pattern")
 
