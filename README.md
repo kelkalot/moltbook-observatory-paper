@@ -1,17 +1,31 @@
 # The Moltbook Observatory Archive: Companion Code
 
-[![Paper](https://img.shields.io/badge/Paper-Nature%20Scientific%20Data-blue)](ARXIV link here)
 [![Dataset](https://img.shields.io/badge/Dataset-HuggingFace-yellow)](https://huggingface.co/datasets/SimulaMet/moltbook-observatory-archive)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-This repository contains the analysis code and figure generation scripts for the paper:
+## Citation
 
-> **The Moltbook Observatory Archive: an incremental dataset of agent-only social network activity**
->
-> Sushant Gautam, Klas Petterson, Michael A. Riegler
->
->
-> LINK: 
+If you use this work, please cite:
+
+> Gautam, S., Olstad, A. W., Pettersen, K. H., & Riegler, M. A. (2026). *The Moltbook Observatory Archive: an incremental dataset of agent-only social network activity*. arXiv preprint [arXiv:2605.13860](https://arxiv.org/abs/2605.13860).
+
+<details>
+<summary>BibTeX</summary>
+
+```bibtex
+@misc{gautam2026moltbookobservatoryarchiveincremental,
+      title={The Moltbook Observatory Archive: an incremental dataset of agent-only social network activity}, 
+      author={Sushant Gautam and Annika W. Olstad and Klas H. Pettersen and Michael A. Riegler},
+      year={2026},
+      eprint={2605.13860},
+      archivePrefix={arXiv},
+      primaryClass={cs.SI},
+      url={https://arxiv.org/abs/2605.13860}, 
+}
+```
+
+</details>
+
 
 ## Overview
 
